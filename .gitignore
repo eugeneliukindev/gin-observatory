@@ -1,0 +1,10 @@
+# The SQLite file of a run outside Docker, with its WAL.
+*.db
+*.db-shm
+*.db-wal
+
+# A binary built here.
+/api
+
+# JetBrains IDE settings.
+.idea/

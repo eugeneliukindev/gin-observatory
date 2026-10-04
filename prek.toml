@@ -1,0 +1,54 @@
+# Git hooks via prek: https://prek.j178.dev
+#:schema https://www.schemastore.org/prek.json
+
+[[repos]]
+repo = "https://github.com/pre-commit/pre-commit-hooks"
+rev = "v5.0.0"
+hooks = [
+  { id = "end-of-file-fixer" },
+  { id = "trailing-whitespace" },
+  { id = "check-merge-conflict" },
+  { id = "check-added-large-files" },
+  # A Kubernetes manifest holds several documents.
+  {
+    id = "check-yaml",
+    args = ["--allow-multiple-documents"]
+  },
+  { id = "check-toml" }
+]
+
+[[repos]]
+repo = "https://github.com/gitleaks/gitleaks"
+rev = "v8.21.0"
+hooks = [
+  { id = "gitleaks" }
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+  {
+    id = "fmt",
+    name = "fmt",
+    entry = "just lint fmt",
+    language = "system",
+    types = ["go"],
+    pass_filenames = false
+  },
+  {
+    id = "golangci",
+    name = "golangci",
+    entry = "just lint golangci",
+    language = "system",
+    types = ["go"],
+    pass_filenames = false
+  },
+  {
+    id = "tidy",
+    name = "tidy",
+    entry = "just lint tidy",
+    language = "system",
+    files = '^(go\.mod|go\.sum|.*\.go)$',
+    pass_filenames = false
+  }
+]
