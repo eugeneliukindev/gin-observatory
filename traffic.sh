@@ -8,8 +8,8 @@
 #   FAIL_PERCENT=30 INVALID_PERCENT=20 ./traffic.sh   # an incident
 #
 # Handlers are picked by weight: mostly post reads, some reports, CPU work and new posts, now and
-# then a missing post (404), a request the API refuses (422, 405) and a deliberate failure (500)
-# with one of five error types. Reports and CPU work cost CPU time — about 0.3 s a report, up to
+# then a missing post (404), a request the API refuses (400, 405) and a deliberate failure (500, 504)
+# with one of six error types. Reports and CPU work cost CPU time — about 0.3 s a report, up to
 # a second /api/cpu — so a high rate needs a lighter mix or more replicas.
 set -euo pipefail
 
@@ -22,8 +22,8 @@ CPU_BELOW_MAX="${CPU_BELOW_MAX:-2000000}"
 FAIL_PERCENT="${FAIL_PERCENT:-5}"
 INVALID_PERCENT="${INVALID_PERCENT:-4}"
 
-# A panic most often, the rest of the kinds /api/fail knows now and then.
-FAILURES=(runtime runtime runtime parse parse decode timeout permission)
+# Panics most often, an index out of range above all; the errors returned now and then.
+FAILURES=(index index index nil nil assertion map timeout permission)
 
 pause=$(awk -v rate="$RATE" 'BEGIN { printf "%.3f", 1 / rate }')
 started=$SECONDS
@@ -54,7 +54,7 @@ pick_request() {
   fi
 }
 
-# A request the API refuses before any handler runs: a bad parameter (422), a wrong method (405).
+# A request the API refuses: a bad parameter (400), a wrong method (405).
 pick_invalid() {
   case $((RANDOM % 3)) in
     0) echo "GET /api/posts/latest" ;;

@@ -34,15 +34,3 @@ func (e *Environment) UnmarshalText(text []byte) error {
 	*e = value
 	return nil
 }
-
-// Failure is a failure /api/fail gives up with on request: each one an error type of its own.
-type Failure string
-
-// The failures, each from a real operation.
-const (
-	FailureRuntime    Failure = "runtime"
-	FailureParse      Failure = "parse"
-	FailureDecode     Failure = "decode"
-	FailureTimeout    Failure = "timeout"
-	FailurePermission Failure = "permission"
-)

@@ -1,14 +1,13 @@
-// Package middleware gives every request a key and writes a line for every response.
+// Package middleware gives every request a key, turns what a handler could not handle into a
+// response and writes a line for every response.
 package middleware
 
 import (
+	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"runtime/debug"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,46 +23,10 @@ import (
 // returned in.
 const RequestIDHeader = "X-Request-ID"
 
-// Unhandled gives up on the request: the access line reports err with the stack of the caller,
-// and the response is a 500 — the error a handler did not expect.
-func Unhandled(c *gin.Context, err error) {
-	_ = c.Error(unhandled{err: err, stack: string(debug.Stack())})
-}
-
-// unhandled is an error with the stack of the place that gave up on it: Go errors carry none.
-type unhandled struct {
-	err   error
-	stack string
-}
-
-func (u unhandled) Error() string { return u.err.Error() }
-func (u unhandled) Unwrap() error { return u.err }
-
-// ErrorType names the error for error.type on the metrics and the span, as the line names it.
-func (u unhandled) ErrorType() string { return errorType(u.err) }
-
-// panicked is what a handler panicked with.
-type panicked struct{ value any }
-
-func (p panicked) Error() string     { return fmt.Sprint(p.value) }
-func (p panicked) ErrorType() string { return fmt.Sprintf("%T", p.value) }
-
-// errorType is the Go type of the error, looking through the wrappers that only add context —
-// fmt.Errorf("…: %w") — but not into the error itself: *strconv.NumError stays, though it wraps
-// strconv.ErrSyntax.
-func errorType(err error) string {
-	for strings.HasPrefix(fmt.Sprintf("%T", err), "*fmt.wrapError") {
-		err = errors.Unwrap(err)
-	}
-	if named, ok := err.(interface{ ErrorType() string }); ok {
-		return named.ErrorType()
-	}
-	return fmt.Sprintf("%T", err)
-}
-
 // Access gives the request a key, returns it in the response and writes a line for every
-// response. A panic or an unhandled error becomes a 500 and a line with its stack. Paths in
-// excludedPaths — liveness probes — get neither a key nor a line.
+// response. A request that failed — an error handed to c.Error, a panic — gets its error in the
+// line and an exception event on its span. Paths in excludedPaths — liveness probes — get neither
+// a key nor a line.
 func Access(excludedPaths ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if slices.Contains(excludedPaths, c.Request.URL.Path) {
@@ -83,54 +46,43 @@ func Access(excludedPaths ...string) gin.HandlerFunc {
 		)
 		c.Header(RequestIDHeader, id)
 
-		serve(c)
+		c.Next()
 
-		failure := lastUnhandled(c)
+		ctx := c.Request.Context()
+		failure := c.Errors.Last()
 		if failure == nil {
-			write(c, "HTTP request handled", started, nil)
+			write(ctx, c, "HTTP request handled", started, nil)
 			return
 		}
-		// Answered here: the client gets a 500 whatever the handler had or had not written.
-		if !c.Writer.Written() {
-			c.String(http.StatusInternalServerError, "Internal Server Error")
+		// otelgin has the span's status and error.type; the event adds what failed and where. Not
+		// span.RecordError: it names a wrapped error by its wrapper, *fmt.wrapError.
+		exception := []attribute.KeyValue{
+			semconv.ExceptionType(errorType(failure.Err)),
+			semconv.ExceptionMessage(failure.Error()),
 		}
-		trace.SpanFromContext(c.Request.Context()).AddEvent("exception", trace.WithAttributes(
-			semconv.ExceptionTypeKey.String(errorType(failure)),
-			semconv.ExceptionMessageKey.String(failure.Error()),
-			semconv.ExceptionStacktraceKey.String(stackOf(failure)),
-		))
-		write(c, "HTTP request failed with an unhandled error", started, failure)
+		if stack := stackOf(failure.Err); stack != "" {
+			exception = append(exception, semconv.ExceptionStacktrace(stack))
+		}
+		trace.SpanFromContext(ctx).AddEvent(semconv.ExceptionEventName, trace.WithAttributes(exception...))
+		write(ctx, c, "HTTP request failed", started, failure.Err)
 	}
 }
 
-// serve runs the handlers, a panic among them recorded as an unhandled error with its stack.
-func serve(c *gin.Context) {
-	defer func() {
-		if value := recover(); value != nil {
-			_ = c.Error(unhandled{err: panicked{value}, stack: string(debug.Stack())})
-			c.Abort()
-		}
-	}()
-	c.Next()
+// errorType names the error as error.type on the metrics does: its type through the fmt.Errorf
+// wrappers, *strconv.NumError for a failed Atoi however deeply wrapped.
+func errorType(err error) string {
+	return semconv.ErrorType(err).Value.AsString()
 }
 
-func lastUnhandled(c *gin.Context) error {
-	for _, recorded := range slices.Backward(c.Errors) {
-		if failure, ok := errors.AsType[unhandled](recorded.Err); ok {
-			return failure
-		}
-	}
-	return nil
-}
-
+// stackOf is the stack a panic happened on; an error returned has none.
 func stackOf(err error) string {
-	if failure, ok := errors.AsType[unhandled](err); ok {
-		return failure.stack
+	if panicked, ok := errors.AsType[*PanicError](err); ok {
+		return panicked.Stack
 	}
 	return ""
 }
 
-func write(c *gin.Context, message string, started time.Time, failure error) {
+func write(ctx context.Context, c *gin.Context, message string, started time.Time, failure error) {
 	attrs := []slog.Attr{
 		slog.String("method", c.Request.Method),
 		slog.String("path", c.Request.URL.Path),
@@ -141,14 +93,16 @@ func write(c *gin.Context, message string, started time.Time, failure error) {
 		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
 	}
 	if failure != nil {
-		// Three fields rather than text: lines are filtered by the kind of failure.
+		// Fields rather than text: lines are filtered by the kind of failure.
 		attrs = append(attrs,
 			slog.String("error_type", errorType(failure)),
 			slog.String("error_message", failure.Error()),
-			slog.String("error_stack", stackOf(failure)),
 		)
+		if stack := stackOf(failure); stack != "" {
+			attrs = append(attrs, slog.String("error_stack", stack))
+		}
 	}
-	slog.LogAttrs(c.Request.Context(), severity(c.Writer.Status()), message, attrs...)
+	slog.LogAttrs(ctx, severity(c.Writer.Status()), message, attrs...)
 }
 
 func severity(status int) slog.Level {

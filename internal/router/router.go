@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -20,8 +19,6 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"go-observatory/internal/dependencies"
-	"go-observatory/internal/enums"
-	"go-observatory/internal/middleware"
 )
 
 const (
@@ -52,9 +49,14 @@ func Register(engine *gin.Engine) {
 	engine.GET("/api/fail", fail)
 }
 
-// unprocessable answers a request whose path, query or body did not validate: a 422, as FastAPI's.
-func unprocessable(c *gin.Context, err error) {
-	c.JSON(http.StatusUnprocessableEntity, gin.H{"detail": err.Error()})
+// badRequest answers a request whose path, query or body did not bind: the client's to fix.
+func badRequest(c *gin.Context, err error) {
+	c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+}
+
+// notFound answers a request for a post there is none of.
+func notFound(c *gin.Context, id int64) {
+	c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("post %d not found", id)})
 }
 
 // showPage serves the page.
@@ -76,15 +78,15 @@ type postPath struct {
 func getPost(c *gin.Context) {
 	var path postPath
 	if err := c.ShouldBindUri(&path); err != nil {
-		unprocessable(c, err)
+		badRequest(c, err)
 		return
 	}
 	post, found, err := readPost(c.Request.Context(), dependencies.From(c), path.PostID)
 	switch {
 	case err != nil:
-		middleware.Unhandled(c, err)
+		_ = c.Error(err)
 	case !found:
-		c.JSON(http.StatusNotFound, gin.H{"detail": fmt.Sprintf("post %d not found", path.PostID)})
+		notFound(c, path.PostID)
 	default:
 		c.JSON(http.StatusOK, post)
 	}
@@ -137,7 +139,7 @@ func getJSON(ctx context.Context, client *http.Client, path string, into any) (i
 func listPosts(c *gin.Context) {
 	rows, err := dependencies.From(c).Database.QueryContext(c.Request.Context(), recentPosts)
 	if err != nil {
-		middleware.Unhandled(c, fmt.Errorf("recent posts: %w", err))
+		_ = c.Error(fmt.Errorf("recent posts: %w", err))
 		return
 	}
 	defer rows.Close()
@@ -145,13 +147,13 @@ func listPosts(c *gin.Context) {
 	for rows.Next() {
 		var post dependencies.Post
 		if err := rows.Scan(&post.ID, &post.UserID, &post.Title, &post.Body); err != nil {
-			middleware.Unhandled(c, fmt.Errorf("recent posts: %w", err))
+			_ = c.Error(fmt.Errorf("recent posts: %w", err))
 			return
 		}
 		posts = append(posts, post)
 	}
 	if err := rows.Err(); err != nil {
-		middleware.Unhandled(c, fmt.Errorf("recent posts: %w", err))
+		_ = c.Error(fmt.Errorf("recent posts: %w", err))
 		return
 	}
 	c.JSON(http.StatusOK, posts)
@@ -168,14 +170,14 @@ type postDraft struct {
 func addPost(c *gin.Context) {
 	var draft postDraft
 	if err := c.ShouldBindJSON(&draft); err != nil {
-		unprocessable(c, err)
+		badRequest(c, err)
 		return
 	}
 	post := dependencies.Post{UserID: draft.UserID, Title: draft.Title, Body: draft.Body}
 	err := dependencies.From(c).Database.QueryRowContext(c.Request.Context(), addPostQuery,
 		post.UserID, post.Title, post.Body).Scan(&post.ID)
 	if err != nil {
-		middleware.Unhandled(c, fmt.Errorf("add post: %w", err))
+		_ = c.Error(fmt.Errorf("add post: %w", err))
 		return
 	}
 	slog.InfoContext(c.Request.Context(), "post created", "post_id", post.ID)
@@ -191,7 +193,7 @@ type cpuQuery struct {
 func burnCPU(c *gin.Context) {
 	var query cpuQuery
 	if err := c.ShouldBindQuery(&query); err != nil {
-		unprocessable(c, err)
+		badRequest(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"primes": countPrimes(c.Request.Context(), query.Below)})
@@ -201,7 +203,7 @@ func burnCPU(c *gin.Context) {
 func buildReport(c *gin.Context) {
 	var path postPath
 	if err := c.ShouldBindUri(&path); err != nil {
-		unprocessable(c, err)
+		badRequest(c, err)
 		return
 	}
 	deps := dependencies.From(c)
@@ -220,11 +222,11 @@ func buildReport(c *gin.Context) {
 		return err
 	})
 	if err := group.Wait(); err != nil {
-		middleware.Unhandled(c, err)
+		_ = c.Error(err)
 		return
 	}
 	if !found {
-		c.JSON(http.StatusNotFound, gin.H{"detail": fmt.Sprintf("post %d not found", path.PostID)})
+		notFound(c, path.PostID)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -234,50 +236,70 @@ func buildReport(c *gin.Context) {
 	})
 }
 
+// failure is a way /api/fail gives up: a bug panics, an operation that did not succeed returns an
+// error. Each has a Go type of its own, error.type on the metrics.
+type failure string
+
+const (
+	failureIndex      failure = "index"      // a panic: runtime.boundsError
+	failureNil        failure = "nil"        // a panic: runtime.errorString
+	failureAssertion  failure = "assertion"  // a panic: *runtime.TypeAssertionError
+	failureMap        failure = "map"        // a panic: runtime.plainError
+	failureTimeout    failure = "timeout"    // an error: context.deadlineExceededError, a 504
+	failurePermission failure = "permission" // an error: *fs.PathError
+)
+
 type failQuery struct {
-	Kind enums.Failure `form:"kind,default=runtime" binding:"oneof=runtime parse decode timeout permission"`
+	Kind failure `form:"kind,default=index" binding:"oneof=index nil assertion map timeout permission"`
 }
 
-// fail gives up with an unhandled error of the kind asked for.
+// fail gives up the way asked for: by a panic or by an error handed to the error middleware.
 func fail(c *gin.Context) {
 	var query failQuery
 	if err := c.ShouldBindQuery(&query); err != nil {
-		unprocessable(c, err)
+		badRequest(c, err)
 		return
 	}
-	middleware.Unhandled(c, failure(c.Request.Context(), query.Kind))
+	if err := giveUp(c.Request.Context(), query.Kind); err != nil {
+		_ = c.Error(err)
+	}
 }
 
-// failure returns the error a failure of this kind gives up with, each from a real operation.
-func failure(ctx context.Context, kind enums.Failure) error {
+// giveUp fails as kind does, each by the mistake or the operation that fails so in real code.
+func giveUp(ctx context.Context, kind failure) error {
 	switch kind {
-	case enums.FailureRuntime:
-		// Indexing past the end of a slice: a runtime panic, runtime.boundsError.
+	case failureIndex:
+		// The first of none.
 		var routes []string
 		_ = routes[len(kind)] //nolint:gosec // the panic is the point
-	case enums.FailureParse:
-		// A number that is not one: *strconv.NumError.
-		_, err := strconv.Atoi("forty-two")
-		return err
-	case enums.FailureDecode:
-		// A title that is a number: *json.UnmarshalTypeError.
-		var post dependencies.Post
-		return json.Unmarshal([]byte(`{"title": 7}`), &post)
-	case enums.FailureTimeout:
-		// Waiting past its own deadline: context.DeadlineExceeded.
+	case failureNil:
+		// A pointer read before anything was assigned to it.
+		var post *dependencies.Post
+		_ = post.Title
+	case failureAssertion:
+		// An interface asserted to a type it does not hold.
+		var payload any = len(kind)
+		_ = payload.(string) //nolint:forcetypeassert // the panic is the point
+	case failureMap:
+		// A write to a map never made.
+		var seen map[failure]bool
+		seen[kind] = true //nolint:staticcheck // the panic is the point
+	case failureTimeout:
+		// Waiting past its own deadline.
 		ctx, cancel := context.WithTimeout(ctx, time.Millisecond)
 		defer cancel()
 		<-ctx.Done()
-		return ctx.Err()
-	case enums.FailurePermission:
-		// A directory only its owner may read: *fs.PathError.
-		if _, err := os.ReadDir("/root"); err != nil {
-			return err
+		return fmt.Errorf("wait for the report: %w", ctx.Err())
+	case failurePermission:
+		// A directory only its owner may read; run as root, it opens, so the error is the one
+		// any other user gets.
+		err := error(&fs.PathError{Op: "open", Path: "/root", Err: fs.ErrPermission})
+		if _, readErr := os.ReadDir("/root"); readErr != nil {
+			err = readErr
 		}
-		// Run as root, the directory opens: the error is the one any other user gets.
-		return &fs.PathError{Op: "open", Path: "/root", Err: fs.ErrPermission}
+		return fmt.Errorf("list reports: %w", err)
 	}
-	return fmt.Errorf("failure %q", kind)
+	return nil
 }
 
 // countPrimes counts the primes below `below` by trial division — expensive on purpose, and in a

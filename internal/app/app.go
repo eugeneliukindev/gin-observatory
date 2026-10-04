@@ -88,7 +88,11 @@ func New(ctx context.Context, settings config.Settings) (*App, error) {
 	engine.Use(
 		// The probe says nothing.
 		otelgin.Middleware(service.Name, otelgin.WithFilter(func(r *http.Request) bool { return r.URL.Path != healthPath })),
+		//nolint:contextcheck // gin.Context passes for a context; the request's carries the span
 		middleware.Access(healthPath),
+		// Inside the line, so the line has the status they answer with.
+		middleware.Recovery(),
+		middleware.Errors(),
 		dependencies.Provide(&dependencies.Dependencies{
 			HTTP:     client,
 			Cache:    cache.New[dependencies.Post](),
