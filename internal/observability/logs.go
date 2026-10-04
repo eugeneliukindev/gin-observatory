@@ -20,8 +20,8 @@ const LevelCritical = slog.Level(12)
 // The logger of our own code; `caller` tells where a line is from.
 const ownLogger = "observatory"
 
-// The names a line carries for its level: the same as the Python service's, so one Loki label
-// serves both.
+// The names a line carries for its level, a Loki label: WARNING rather than slog's WARN, and
+// CRITICAL above ERROR.
 var levelNames = map[slog.Level]string{
 	slog.LevelDebug: "DEBUG",
 	slog.LevelInfo:  "INFO",
@@ -48,7 +48,7 @@ func renameBuiltIn(groups []string, a slog.Attr) slog.Attr {
 	}
 	switch a.Key {
 	case slog.TimeKey:
-		// UTC to the millisecond, as the Python service writes it.
+		// UTC to the millisecond.
 		return slog.String("ts", a.Value.Time().UTC().Format("2006-01-02T15:04:05.000-07:00"))
 	case slog.LevelKey:
 		level, _ := a.Value.Any().(slog.Level)
@@ -93,7 +93,7 @@ func (h contextualHandler) WithGroup(name string) slog.Handler {
 	return contextualHandler{h.Handler.WithGroup(name)}
 }
 
-// caller is `package:function:line`, as the Python service's `module:function:line`.
+// caller is `package:function:line`.
 func caller(pc uintptr) string {
 	frame, _ := runtime.CallersFrames([]uintptr{pc}).Next()
 	// go-observatory/internal/middleware.write → middleware, write.

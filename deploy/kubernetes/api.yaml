@@ -15,7 +15,7 @@ kind: Deployment
 metadata:
   name: api
 spec:
-  # Two pods of two workers each: instances and workers on the dashboard are no longer equal.
+  # Two pods, one process each: two instances on the dashboard.
   replicas: 2
   selector:
     matchLabels:

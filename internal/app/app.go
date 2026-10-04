@@ -117,7 +117,7 @@ func (a *App) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// baseURL sends a request for a path to the source, as httpx's base_url does.
+// baseURL sends a request for a path to the source: a handler names the path only.
 type baseURL struct {
 	base *url.URL
 	next http.RoundTripper

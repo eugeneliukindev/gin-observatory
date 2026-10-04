@@ -1,5 +1,5 @@
 // Package dependencies hands the handlers what the application was built with, through the gin
-// context, as FastAPI's Depends hands it through the request.
+// context.
 package dependencies
 
 import (

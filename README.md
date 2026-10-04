@@ -21,8 +21,8 @@
 
 </div>
 
-The Go twin of fastapi-observatory: the same handlers, the same JSON lines,
-the same stack and the same dashboard, in Go. The handlers have no business logic: they only touch
+A gin service and everything that watches it: traces, metrics, logs and profiles of every request,
+collected by Alloy and read on one Grafana dashboard. The handlers have no business logic: they only touch
 what shows up in Grafana — an in-memory cache, SQLite, an external API
 ([JSONPlaceholder](https://jsonplaceholder.typicode.com)) and the CPU. One process per instance,
 its goroutines over every core Go is given.
@@ -51,8 +51,7 @@ cluster with `just k3d up` — see [Kubernetes](#%EF%B8%8F-kubernetes).
 
 > [!TIP]
 > Every button on the page is a trace that starts in the browser. `just dc down -v` wipes the data;
-> `just run` runs the application outside Docker against the running stack. The ports are
-> fastapi-observatory's: stop one stack before starting the other.
+> `just run` runs the application outside Docker against the running stack.
 
 ![The application's page](docs/screenshots/00-page.png)
 
@@ -110,14 +109,10 @@ flowchart LR
 | 🧵 traces | OTLP gRPC; the browser's through Faro | `otelcol.receiver.otlp` · `faro.receiver` | Tempo, 3 days |
 | 🔥 profiles | Pyroscope Go SDK: CPU, memory, goroutines, mutexes, blocking — samples labelled with their span | `pyroscope.receive_http` | Pyroscope |
 
-> [!NOTE]
-> The collector is configured as in fastapi-observatory, file for file: Alloy, Loki and Tempo do not
-> know which language sends to them.
-
 ## 📊 Dashboard
 
-**Go: traffic, latency, errors, traces, logs, profile** — fastapi-observatory's dashboard with a Go
-runtime where the Python one has workers. Nothing hardcoded: data sources, service, routes,
+**Go: traffic, latency, errors, traces, logs, profile** — the routes' traffic, latency and errors,
+the SLO, the Go runtime, profiles, traces and logs on one dashboard. Nothing hardcoded: data sources, service, routes,
 method, host and thresholds are variables. A series on the route, status code and error panels
 links to its traces or log lines — click it; a route in the Routes table narrows the whole
 dashboard to itself.
@@ -148,7 +143,7 @@ dashboard to itself.
 | | Logs | of the levels picked: lines by level · the stream — time, level, status, duration, request and message in columns |
 
 An instance is one process, and Go runs its goroutines on GOMAXPROCS threads at once — every core
-it is given, not the one a Python worker gets under the GIL. So the CPU panel is in fractions of
+it is given. So the CPU panel is in fractions of
 GOMAXPROCS, and the scheduler panel shows what comes before it reaches 100%: runnable goroutines
 waiting for a thread. Goroutines that only climb are a leak; a heap running past its GC goal again
 and again is a collector that cannot keep up.
@@ -157,7 +152,7 @@ and again is a collector that cannot keep up.
 [`dashboards/`](observability/grafana/dashboards), each translated whole; a change to one is a
 change to all three.
 
-Lines read as in fastapi-observatory: a total is thick, over a light fill, named `total`; a thin line
+Lines read alike on every panel: a total is thick, over a light fill, named `total`; a thin line
 without fill is one route or one instance; a dash is grey for yesterday and white for a reference —
 the objective, an even split, the GC goal.
 
@@ -237,8 +232,7 @@ SQLite and the CPU work:
 
 ## 💻 Server
 
-One `net/http.Server` per process, gin behind it, built in [`internal/app`](internal/app) — the
-counterpart of `create_app`:
+One `net/http.Server` per process, gin behind it, built in [`internal/app`](internal/app):
 
 ```mermaid
 flowchart LR
@@ -252,21 +246,19 @@ flowchart LR
 | health | `/health` — neither traced nor logged; the image has no shell, so `api health` asks it |
 | image | distroless, static, non-root: no cgo, SQLite is pure Go |
 
-The layout follows fastapi-observatory module for module:
-
-| Python | Go |
+| package | holds |
 |---|---|
-| `__main__.py` | [`cmd/api`](cmd/api) |
-| `app.py` · `create_app` | [`internal/app`](internal/app) · `New` |
-| `config.py` · `Settings` | [`internal/config`](internal/config) · `Settings`, read by [env](https://github.com/caarlos0/env) |
-| `enums.py` | [`internal/enums`](internal/enums) |
-| `cache.py` · `MemoryCache` | [`internal/cache`](internal/cache) · `MemoryCache` |
-| `database.py` | [`internal/database`](internal/database) |
-| `dependencies.py` | [`internal/dependencies`](internal/dependencies) — through the gin context |
-| `middleware.py` · `AccessMiddleware` | [`internal/middleware`](internal/middleware) · `Access`, with `Recovery` and `Errors` for what an exception handler does |
-| `observability/` | [`internal/observability`](internal/observability) · `ConfigureTracing`, `ConfigureMetrics`, `ConfigureProfiling`, `ConfigureLogging` |
-| `router.py` | [`internal/router`](internal/router) |
-| `templates/` · `static/` | [`web`](web), built into the binary |
+| [`cmd/api`](cmd/api) | `main`: serves, or `api health` asks a running one |
+| [`internal/app`](internal/app) | `New` — telemetry, clients, the database, the middleware and the routes |
+| [`internal/config`](internal/config) | `Settings`, read by [env](https://github.com/caarlos0/env) |
+| [`internal/enums`](internal/enums) | the closed sets of values read from outside |
+| [`internal/cache`](internal/cache) | `MemoryCache`, its reads and writes traced |
+| [`internal/database`](internal/database) | SQLite through otelsql |
+| [`internal/dependencies`](internal/dependencies) | what the handlers use, through the gin context |
+| [`internal/middleware`](internal/middleware) | `Access`, `Recovery`, `Errors` |
+| [`internal/observability`](internal/observability) | `ConfigureTracing`, `ConfigureMetrics`, `ConfigureProfiling`, `ConfigureLogging` |
+| [`internal/router`](internal/router) | the handlers |
+| [`web`](web) | the page and its static files, built into the binary |
 
 ## 📜 Logging
 
@@ -274,13 +266,12 @@ The layout follows fastapi-observatory module for module:
 {"ts":"2026-10-04T17:58:37.211+00:00","lvl":"INFO","msg":"HTTP request handled","logger":"observatory","caller":"middleware:write:105","request_id":"97e5befa-9329-4b8f-a4a6-96221e9e52f8","trace_id":"5d04993f…","span_id":"…","method":"GET","path":"/api/posts/3","route":"/api/posts/:post_id","query":"","status":200,"duration_ms":2}
 ```
 
-The line fastapi-observatory writes, field for field and in the same order, from `log/slog`: a
-handler stamps every record with `caller`, the request key and the current trace and span — empty
-outside a request — and names the levels `WARNING` and `CRITICAL`, as Python does, so one Loki label
-and one picker serve both. The access line's level follows the status: `INFO`, `WARNING` for a 4xx,
+One JSON line per record from `log/slog`: a handler stamps every record with `caller`, the request
+key and the current trace and span — empty outside a request. The levels are `DEBUG`, `INFO`,
+`WARNING`, `ERROR` and `CRITICAL`, a Loki label and the dashboard's picker. The access line's level follows the status: `INFO`, `WARNING` for a 4xx,
 `ERROR` for a 5xx.
 
-A Python exception is two things in Go. What can fail — I/O, a deadline, a parse — returns an
+A failure is one of two things. What can fail — I/O, a deadline, a parse — returns an
 error: the handler answers what it expects itself (a 400, a 404) and hands the rest to `c.Error`,
 wrapped in what it was doing, `list reports: open /root: permission denied`; the `Errors`
 middleware picks the status, a 504 for a deadline and a 500 for anything else, and never sends the
@@ -306,7 +297,7 @@ The process ships only the server's and its own metrics: one view keeps `http.se
 | `traces_spanmetrics_calls_total`, `traces_spanmetrics_latency` | Tempo, from spans of both services | `service`, `span_name`, `span_kind`, `status_code`, … |
 | `traces_service_graph_request_*` | Alloy, from span pairs | `client`, `server`, `connection_type`, `failed` |
 
-Labels on every series are the resource's, as in fastapi-observatory: `job` from `service.name`,
+Labels on every series are the resource's: `job` from `service.name`,
 `instance` from `service.instance.id` — `<host>-<pid>` — and the rest in `target_info`.
 
 ## 🔥 Profiles
@@ -323,8 +314,7 @@ taken there with its id, so **Profiles for this span** on a trace shows exactly 
 
 ## 🔧 Configuration
 
-Environment variables with the `OBSERVATORY__` prefix; groups nest with `__` — the names
-fastapi-observatory reads.
+Environment variables with the `OBSERVATORY__` prefix; groups nest with `__`.
 
 | variable | default |
 |---|---|
@@ -343,8 +333,7 @@ process runs with.
 
 `just k3d up` runs the same stack in a local [k3d](https://k3d.io) cluster: it builds the image,
 imports it, applies [`deploy/kubernetes/`](deploy/kubernetes) and waits for the rollout; `just k3d
-down` deletes the cluster. The API runs two pods, one process each. The manifests are
-fastapi-observatory's, the namespace and the image renamed.
+down` deletes the cluster. The API runs two pods, one process each.
 
 ## 🧰 Development
 
@@ -361,16 +350,16 @@ fastapi-observatory's, the namespace and the image renamed.
 | `just traffic` | requests at the running stack: `RATE`, `DURATION`, and the mix — `CPU_PERCENT`, `REPORT_PERCENT`, `CPU_BELOW_MAX`, `FAIL_PERCENT`, `INVALID_PERCENT` |
 | `just run` | the application outside Docker, against the running stack |
 
-| Python | Go |
+| for | library |
 |---|---|
-| pydantic-settings | [env](https://github.com/caarlos0/env) |
-| pydantic in FastAPI | gin's binding, on [validator](https://github.com/go-playground/validator) |
-| FastAPI · Starlette | [gin](https://github.com/gin-gonic/gin) |
-| httpx | `net/http` |
-| sqlite3 | `database/sql` + [modernc.org/sqlite](https://gitlab.com/cznic/sqlite), traced by [otelsql](https://github.com/XSAM/otelsql) |
-| logging + a JSON formatter | `log/slog` |
-| uuid | [google/uuid](https://github.com/google/uuid) |
-| ruff · flake8 · mypy | [golangci-lint](https://golangci-lint.run) — gofumpt, gci and a strict set of linters |
+| settings | [env](https://github.com/caarlos0/env) |
+| HTTP server | [gin](https://github.com/gin-gonic/gin) |
+| validation | gin's binding, on [validator](https://github.com/go-playground/validator) |
+| HTTP client | `net/http` |
+| SQLite | `database/sql` + [modernc.org/sqlite](https://gitlab.com/cznic/sqlite), traced by [otelsql](https://github.com/XSAM/otelsql) |
+| logs | `log/slog` |
+| request keys | [google/uuid](https://github.com/google/uuid) |
+| lint | [golangci-lint](https://golangci-lint.run) — gofumpt, gci and a strict set of linters |
 
 ## 🧱 Stack
 
