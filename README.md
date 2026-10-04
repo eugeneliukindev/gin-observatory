@@ -152,6 +152,12 @@ and again is a collector that cannot keep up.
 [`dashboards/`](observability/grafana/dashboards), each translated whole; a change to one is a
 change to all three.
 
+**On grafana.com.** Its upload takes the classic dashboard JSON, not the v2 schema these are in:
+[`grafana-com/go-observatory.json`](observability/grafana/grafana-com/go-observatory.json) is the
+English one as Grafana itself converts it — `GET /apis/dashboard.grafana.app/v1beta1/…/dashboards/go-observatory`.
+The classic schema has no rows inside rows and no row variables, so the rows lie flat and their
+pickers join the variables on top; the data sources stay variables, picked on import.
+
 Lines read alike on every panel: a total is thick, over a light fill, named `total`; a thin line
 without fill is one route or one instance; a dash is grey for yesterday and white for a reference —
 the objective, an even split, the GC goal.
