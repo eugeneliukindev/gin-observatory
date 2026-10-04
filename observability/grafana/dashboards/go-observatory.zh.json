@@ -3244,8 +3244,8 @@
         "kind": "Panel",
         "spec": {
           "id": 40,
-          "title": "堆 — 已用 · GC 目标，按实例",
-          "description": "Go 运行时占用的内存，虚线是下一次 GC 的目标堆大小。已用一次又一次超过目标，说明回收器跟不上。",
+          "title": "内存 — 已用 · GC 目标，按实例",
+          "description": "Go 运行时占用的内存（堆、goroutine 栈和运行时自身），虚线是下一次 GC 的目标堆大小。已用高出目标的部分是栈和运行时；已用上涨而目标不变，说明堆外内存在增长，最常见的是永不结束的 goroutine。",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -3263,7 +3263,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "max by (instance) (go_memory_used_bytes{job=~\"$service\", instance=~\"(${host:regex})-[0-9]+\"})",
+                        "expr": "sum by (instance) (go_memory_used_bytes{job=~\"$service\", instance=~\"(${host:regex})-[0-9]+\"})",
                         "instant": false,
                         "legendFormat": "{{instance}}",
                         "range": true

@@ -3244,8 +3244,8 @@
         "kind": "Panel",
         "spec": {
           "id": 40,
-          "title": "Heap — used · GC goal, by instance",
-          "description": "Memory the Go runtime holds, under the heap size the next GC aims for, dashed. Used running past the goal again and again means the collector cannot keep up.",
+          "title": "Memory — used · GC goal, by instance",
+          "description": "Memory the Go runtime holds — the heap, goroutine stacks and its own — and, dashed, the heap size the next GC aims for. Used sits above the goal by the stacks and the runtime; used climbing while the goal holds is memory outside the heap, most often goroutines that never end.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -3263,7 +3263,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "max by (instance) (go_memory_used_bytes{job=~\"$service\", instance=~\"(${host:regex})-[0-9]+\"})",
+                        "expr": "sum by (instance) (go_memory_used_bytes{job=~\"$service\", instance=~\"(${host:regex})-[0-9]+\"})",
                         "instant": false,
                         "legendFormat": "{{instance}}",
                         "range": true

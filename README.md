@@ -137,7 +137,7 @@ dashboard to itself.
 | | Payload, collapsed | bytes per second · body size P95 by route, requests dashed and responses solid |
 | SLO | | error budget left · burn rate over 1 h and 6 h · requests fast enough — all over 7 days, with sparklines · availability against the objective |
 | Runtime | Go runtime | request share against an even split · the percentiles picked, under their total · goroutines, stacked · CPU against GOMAXPROCS · scheduler latency · instance starts |
-| | Memory, collapsed | heap used against the GC goal · allocations in bytes and objects per second · GOMAXPROCS and GOGC |
+| | Memory, collapsed | memory used against the GC goal · allocations in bytes and objects per second · GOMAXPROCS and GOGC |
 | | Profiling, collapsed | flame graph of the profile type picked |
 | Traces & logs | Traces | the traces picked in Show, newest first |
 | | Logs | of the levels picked: lines by level · the stream — time, level, status, duration, request and message in columns |
@@ -145,8 +145,8 @@ dashboard to itself.
 An instance is one process, and Go runs its goroutines on GOMAXPROCS threads at once — every core
 it is given. So the CPU panel is in fractions of
 GOMAXPROCS, and the scheduler panel shows what comes before it reaches 100%: runnable goroutines
-waiting for a thread. Goroutines that only climb are a leak; a heap running past its GC goal again
-and again is a collector that cannot keep up.
+waiting for a thread. Goroutines that only climb are a leak; so is memory that climbs while the GC
+goal holds — it grows outside the heap, most often in the stacks of goroutines that never end.
 
 **In three languages.** English, Русский and 中文 are three dashboards in
 [`dashboards/`](observability/grafana/dashboards), each translated whole; a change to one is a
